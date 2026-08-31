@@ -10,6 +10,7 @@ type Emp = {
   phone: string | null;
   department: string | null;
   joining_date: string;
+  active: boolean;
 };
 
 type Att = {
@@ -71,6 +72,9 @@ export default function Dashboard({
 
   const [statusFilter, setStatusFilter] =
     useState('all');
+
+  const [employeeStatusFilter, setEmployeeStatusFilter] =
+    useState('active');
 
   const [tab, setTab] = useState<
     'attendance' | 'employees' | 'reports'
@@ -202,59 +206,89 @@ export default function Dashboard({
 
       const departmentMatch =
         departmentFilter === 'all' ||
-        e.department ===
-          departmentFilter;
+        e.department === departmentFilter;
+
+      const employeeStatusMatch =
+        employeeStatusFilter === 'all' ||
+        (employeeStatusFilter === 'active' &&
+          e.active !== false) ||
+        (employeeStatusFilter === 'inactive' &&
+          e.active === false);
 
       const employeeStatus =
         status(e.id);
 
-      const statusMatch =
+      const attendanceStatusMatch =
         statusFilter === 'all' ||
         employeeStatus === statusFilter;
 
       return (
         textMatch &&
         departmentMatch &&
-        statusMatch
+        employeeStatusMatch &&
+        attendanceStatusMatch
       );
     });
   }, [
     emps,
     search,
     departmentFilter,
+    employeeStatusFilter,
     statusFilter,
     atts,
   ]);
 
   const counts = useMemo(() => {
+    const activeEmployees = emps.filter(
+      (e) => e.active !== false
+    );
+
+    const activeIds = new Set(
+      activeEmployees.map((e) => e.id)
+    );
+
+    const activeAttendance = atts.filter(
+      (a) => activeIds.has(a.employee_id)
+    );
+
     return {
-      p: atts.filter(
+      p: activeAttendance.filter(
         (a) => a.status === 'present'
       ).length,
 
-      a: atts.filter(
+      a: activeAttendance.filter(
         (a) => a.status === 'absent'
       ).length,
 
-      l: atts.filter(
+      l: activeAttendance.filter(
         (a) => a.status === 'leave'
       ).length,
 
-      h: atts.filter(
+      h: activeAttendance.filter(
         (a) => a.status === 'half_day'
       ).length,
 
       unmarked:
-        emps.length -
-        atts.length,
+        activeEmployees.length -
+        activeAttendance.length,
     };
   }, [atts, emps]);
 
+  const activeEmployeeCount =
+    emps.filter(
+      (e) => e.active !== false
+    ).length;
+
+  const inactiveEmployeeCount =
+    emps.filter(
+      (e) => e.active === false
+    ).length;
+
   const attendancePercentage =
-    emps.length === 0
+    activeEmployeeCount === 0
       ? 0
       : Math.round(
-          (counts.p / emps.length) *
+          (counts.p / activeEmployeeCount) *
             100
         );
 
@@ -262,6 +296,19 @@ export default function Dashboard({
     id: string,
     newStatus: string
   ) {
+    const employee = emps.find(
+      (e) => e.id === id
+    );
+
+    if (!employee) return;
+
+    if (employee.active === false) {
+      setMsg(
+        'Inactive employees cannot have attendance marked.'
+      );
+      return;
+    }
+
     setMsg('Updating attendance...');
 
     const {
@@ -325,6 +372,7 @@ export default function Dashboard({
           form.department.trim() || null,
         joining_date:
           form.joining_date,
+        active: true,
       });
 
     if (error) {
@@ -459,6 +507,15 @@ export default function Dashboard({
         )
       );
 
+      if (
+        selectedEmployee?.id ===
+        editingId
+      ) {
+        setSelectedEmployee(
+          updatedEmployee as Emp
+        );
+      }
+
       setEditingId(null);
 
       setEditForm({
@@ -475,6 +532,94 @@ export default function Dashboard({
     } catch (error) {
       setMsg(
         'Save changes error: ' +
+          (error instanceof Error
+            ? error.message
+            : String(error))
+      );
+    }
+  }
+
+  async function toggleEmployeeActive(
+    id: string,
+    name: string,
+    currentlyActive: boolean
+  ) {
+    const action = currentlyActive
+      ? 'deactivate'
+      : 'restore';
+
+    const confirmed =
+      window.confirm(
+        currentlyActive
+          ? `Are you sure you want to deactivate ${name}? Their attendance history will be kept.`
+          : `Are you sure you want to restore ${name}?`
+      );
+
+    if (!confirmed) return;
+
+    setMsg(
+      currentlyActive
+        ? 'Deactivating employee...'
+        : 'Restoring employee...'
+    );
+
+    try {
+      const { error } = await sb
+        .from('employees')
+        .update({
+          active: !currentlyActive,
+        })
+        .eq('id', id);
+
+      if (error) {
+        setMsg(
+          `Could not ${action} employee: ` +
+            error.message
+        );
+        return;
+      }
+
+      setEmps((current) =>
+        current.map((employee) =>
+          employee.id === id
+            ? {
+                ...employee,
+                active: !currentlyActive,
+              }
+            : employee
+        )
+      );
+
+      if (
+        selectedEmployee?.id === id
+      ) {
+        setSelectedEmployee(
+          (current) =>
+            current
+              ? {
+                  ...current,
+                  active:
+                    !currentlyActive,
+                }
+              : null
+        );
+      }
+
+      if (
+        editingId === id &&
+        currentlyActive
+      ) {
+        cancelEdit();
+      }
+
+      setMsg(
+        currentlyActive
+          ? `${name} deactivated successfully.`
+          : `${name} restored successfully.`
+      );
+    } catch (error) {
+      setMsg(
+        `${action} employee error: ` +
           (error instanceof Error
             ? error.message
             : String(error))
@@ -542,6 +687,13 @@ export default function Dashboard({
 
       if (editingId === id) {
         cancelEdit();
+      }
+
+      if (
+        selectedEmployee?.id === id
+      ) {
+        setSelectedEmployee(null);
+        setHistory([]);
       }
 
       setMsg(
@@ -1087,10 +1239,12 @@ export default function Dashboard({
             }}
           >
             <div className="card">
-              <b>{emps.length}</b>
+              <b>
+                {activeEmployeeCount}
+              </b>
 
               <div className="muted">
-                Employees
+                Active employees
               </div>
             </div>
 
@@ -1190,121 +1344,127 @@ export default function Dashboard({
                     </td>
                   </tr>
                 ) : (
-                  filtered.map(
-                    (e) => (
-                      <tr
-                        key={e.id}
-                      >
-                        <td>
-                          <b>
-                            {e.name}
-                          </b>
-
-                          <div className="muted">
-                            {e.department ||
-                              ''}
-                          </div>
-                        </td>
-
-                        <td>
-                          {
-                            e.employee_code
-                          }
-                        </td>
-
-                        <td>
-                          {status(
-                            e.id
-                          ) ? (
-                            <span
-                              className={
-                                'badge ' +
-                                ({
-                                  present:
-                                    'p',
-                                  absent:
-                                    'a',
-                                  leave:
-                                    'l',
-                                  half_day:
-                                    'h',
-                                } as any)[
-                                  status(
-                                    e.id
-                                  )
-                                ]
-                              }
-                            >
-                              {status(
-                                e.id
-                              ).replace(
-                                '_',
-                                ' '
-                              )}
-                            </span>
-                          ) : (
-                            <span className="muted">
-                              Not marked
-                            </span>
-                          )}
-                        </td>
-
-                        <td>
-                          <div className="toolbar">
-
-                            <button
-                              className="btn"
-                              onClick={() =>
-                                mark(
-                                  e.id,
-                                  'present'
-                                )
-                              }
-                            >
-                              P
-                            </button>
-
-                            <button
-                              className="btn danger"
-                              onClick={() =>
-                                mark(
-                                  e.id,
-                                  'absent'
-                                )
-                              }
-                            >
-                              A
-                            </button>
-
-                            <button
-                              className="btn secondary"
-                              onClick={() =>
-                                mark(
-                                  e.id,
-                                  'leave'
-                                )
-                              }
-                            >
-                              L
-                            </button>
-
-                            <button
-                              className="btn secondary"
-                              onClick={() =>
-                                mark(
-                                  e.id,
-                                  'half_day'
-                                )
-                              }
-                            >
-                              ½
-                            </button>
-
-                          </div>
-                        </td>
-                      </tr>
+                  filtered
+                    .filter(
+                      (e) =>
+                        e.active !== false
                     )
-                  )
+                    .map(
+                      (e) => (
+                        <tr
+                          key={e.id}
+                        >
+                          <td>
+                            <b>
+                              {e.name}
+                            </b>
+
+                            <div className="muted">
+                              {e.department ||
+                                ''}
+                            </div>
+                          </td>
+
+                          <td>
+                            {
+                              e.employee_code
+                            }
+                          </td>
+
+                          <td>
+                            {status(
+                              e.id
+                            ) ? (
+                              <span
+                                className={
+                                  'badge ' +
+                                  (({
+                                    present:
+                                      'p',
+                                    absent:
+                                      'a',
+                                    leave:
+                                      'l',
+                                    half_day:
+                                      'h',
+                                  } as any)[
+                                    status(
+                                      e.id
+                                    )
+                                  ] ||
+                                    '')
+                                }
+                              >
+                                {status(
+                                  e.id
+                                ).replace(
+                                  '_',
+                                  ' '
+                                )}
+                              </span>
+                            ) : (
+                              <span className="muted">
+                                Not marked
+                              </span>
+                            )}
+                          </td>
+
+                          <td>
+                            <div className="toolbar">
+
+                              <button
+                                className="btn"
+                                onClick={() =>
+                                  mark(
+                                    e.id,
+                                    'present'
+                                  )
+                                }
+                              >
+                                P
+                              </button>
+
+                              <button
+                                className="btn danger"
+                                onClick={() =>
+                                  mark(
+                                    e.id,
+                                    'absent'
+                                  )
+                                }
+                              >
+                                A
+                              </button>
+
+                              <button
+                                className="btn secondary"
+                                onClick={() =>
+                                  mark(
+                                    e.id,
+                                    'leave'
+                                  )
+                                }
+                              >
+                                L
+                              </button>
+
+                              <button
+                                className="btn secondary"
+                                onClick={() =>
+                                  mark(
+                                    e.id,
+                                    'half_day'
+                                  )
+                                }
+                              >
+                                ½
+                              </button>
+
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    )
                 )}
               </tbody>
             </table>
@@ -1313,316 +1473,411 @@ export default function Dashboard({
       )}
 
       {tab === 'employees' && (
-        <div className="grid two">
+        <div>
 
-          <div className="card">
+          <div
+            className="toolbar"
+            style={{
+              marginBottom: 16,
+            }}
+          >
+            <button
+              className={
+                'btn ' +
+                (employeeStatusFilter ===
+                'active'
+                  ? ''
+                  : 'secondary')
+              }
+              onClick={() =>
+                setEmployeeStatusFilter(
+                  'active'
+                )
+              }
+            >
+              Active ({activeEmployeeCount})
+            </button>
 
-            <h3>
-              {editingId
-                ? 'Edit employee'
-                : 'Add employee'}
-            </h3>
+            <button
+              className={
+                'btn ' +
+                (employeeStatusFilter ===
+                'inactive'
+                  ? ''
+                  : 'secondary')
+              }
+              onClick={() =>
+                setEmployeeStatusFilter(
+                  'inactive'
+                )
+              }
+            >
+              Deactivated ({inactiveEmployeeCount})
+            </button>
 
-            <div className="formgrid">
+            <button
+              className={
+                'btn ' +
+                (employeeStatusFilter ===
+                'all'
+                  ? ''
+                  : 'secondary')
+              }
+              onClick={() =>
+                setEmployeeStatusFilter(
+                  'all'
+                )
+              }
+            >
+              All ({emps.length})
+            </button>
+          </div>
 
-              <div>
-                <label className="label">
-                  Full name
-                </label>
+          <div className="grid two">
 
-                <input
-                  className="input"
-                  value={
-                    editingId
-                      ? editForm.name
-                      : form.name
-                  }
-                  onChange={(e) => {
-                    if (editingId) {
-                      setEditForm({
-                        ...editForm,
-                        name:
-                          e.target.value,
-                      });
-                    } else {
-                      setForm({
-                        ...form,
-                        name:
-                          e.target.value,
-                      });
+            <div className="card">
+
+              <h3>
+                {editingId
+                  ? 'Edit employee'
+                  : 'Add employee'}
+              </h3>
+
+              <div className="formgrid">
+
+                <div>
+                  <label className="label">
+                    Full name
+                  </label>
+
+                  <input
+                    className="input"
+                    value={
+                      editingId
+                        ? editForm.name
+                        : form.name
                     }
-                  }}
-                />
+                    onChange={(e) => {
+                      if (editingId) {
+                        setEditForm({
+                          ...editForm,
+                          name:
+                            e.target.value,
+                        });
+                      } else {
+                        setForm({
+                          ...form,
+                          name:
+                            e.target.value,
+                        });
+                      }
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label className="label">
+                    Employee ID
+                  </label>
+
+                  <input
+                    className="input"
+                    value={
+                      editingId
+                        ? editForm.employee_code
+                        : form.employee_code
+                    }
+                    onChange={(e) => {
+                      if (editingId) {
+                        setEditForm({
+                          ...editForm,
+                          employee_code:
+                            e.target.value,
+                        });
+                      } else {
+                        setForm({
+                          ...form,
+                          employee_code:
+                            e.target.value,
+                        });
+                      }
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label className="label">
+                    Phone
+                  </label>
+
+                  <input
+                    className="input"
+                    value={
+                      editingId
+                        ? editForm.phone
+                        : form.phone
+                    }
+                    onChange={(e) => {
+                      if (editingId) {
+                        setEditForm({
+                          ...editForm,
+                          phone:
+                            e.target.value,
+                        });
+                      } else {
+                        setForm({
+                          ...form,
+                          phone:
+                            e.target.value,
+                        });
+                      }
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label className="label">
+                    Department
+                  </label>
+
+                  <input
+                    className="input"
+                    value={
+                      editingId
+                        ? editForm.department
+                        : form.department
+                    }
+                    onChange={(e) => {
+                      if (editingId) {
+                        setEditForm({
+                          ...editForm,
+                          department:
+                            e.target.value,
+                        });
+                      } else {
+                        setForm({
+                          ...form,
+                          department:
+                            e.target.value,
+                        });
+                      }
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label className="label">
+                    Joining date
+                  </label>
+
+                  <input
+                    className="input"
+                    type="date"
+                    value={
+                      editingId
+                        ? editForm.joining_date
+                        : form.joining_date
+                    }
+                    onChange={(e) => {
+                      if (editingId) {
+                        setEditForm({
+                          ...editForm,
+                          joining_date:
+                            e.target.value,
+                        });
+                      } else {
+                        setForm({
+                          ...form,
+                          joining_date:
+                            e.target.value,
+                        });
+                      }
+                    }}
+                  />
+                </div>
+
               </div>
 
-              <div>
-                <label className="label">
-                  Employee ID
-                </label>
-
-                <input
-                  className="input"
-                  value={
-                    editingId
-                      ? editForm.employee_code
-                      : form.employee_code
-                  }
-                  onChange={(e) => {
-                    if (editingId) {
-                      setEditForm({
-                        ...editForm,
-                        employee_code:
-                          e.target.value,
-                      });
-                    } else {
-                      setForm({
-                        ...form,
-                        employee_code:
-                          e.target.value,
-                      });
-                    }
+              {!editingId ? (
+                <button
+                  className="btn"
+                  style={{
+                    marginTop: 14,
                   }}
-                />
-              </div>
-
-              <div>
-                <label className="label">
-                  Phone
-                </label>
-
-                <input
-                  className="input"
-                  value={
-                    editingId
-                      ? editForm.phone
-                      : form.phone
-                  }
-                  onChange={(e) => {
-                    if (editingId) {
-                      setEditForm({
-                        ...editForm,
-                        phone:
-                          e.target.value,
-                      });
-                    } else {
-                      setForm({
-                        ...form,
-                        phone:
-                          e.target.value,
-                      });
-                    }
+                  onClick={add}
+                >
+                  Add employee
+                </button>
+              ) : (
+                <div
+                  className="toolbar"
+                  style={{
+                    marginTop: 14,
                   }}
-                />
-              </div>
-
-              <div>
-                <label className="label">
-                  Department
-                </label>
-
-                <input
-                  className="input"
-                  value={
-                    editingId
-                      ? editForm.department
-                      : form.department
-                  }
-                  onChange={(e) => {
-                    if (editingId) {
-                      setEditForm({
-                        ...editForm,
-                        department:
-                          e.target.value,
-                      });
-                    } else {
-                      setForm({
-                        ...form,
-                        department:
-                          e.target.value,
-                      });
+                >
+                  <button
+                    className="btn"
+                    onClick={
+                      saveEdit
                     }
-                  }}
-                />
-              </div>
+                  >
+                    Save changes
+                  </button>
 
-              <div>
-                <label className="label">
-                  Joining date
-                </label>
-
-                <input
-                  className="input"
-                  type="date"
-                  value={
-                    editingId
-                      ? editForm.joining_date
-                      : form.joining_date
-                  }
-                  onChange={(e) => {
-                    if (editingId) {
-                      setEditForm({
-                        ...editForm,
-                        joining_date:
-                          e.target.value,
-                      });
-                    } else {
-                      setForm({
-                        ...form,
-                        joining_date:
-                          e.target.value,
-                      });
+                  <button
+                    className="btn secondary"
+                    onClick={
+                      cancelEdit
                     }
-                  }}
-                />
-              </div>
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
 
             </div>
 
-            {!editingId ? (
-              <button
-                className="btn"
-                style={{
-                  marginTop: 14,
-                }}
-                onClick={add}
-              >
-                Add employee
-              </button>
-            ) : (
-              <div
-                className="toolbar"
-                style={{
-                  marginTop: 14,
-                }}
-              >
-                <button
-                  className="btn"
-                  onClick={
-                    saveEdit
-                  }
-                >
-                  Save changes
-                </button>
+            <div className="card tablewrap">
 
-                <button
-                  className="btn secondary"
-                  onClick={
-                    cancelEdit
-                  }
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
+              <h3>
+                Employees
+              </h3>
 
-          </div>
+              <table>
 
-          <div className="card tablewrap">
-
-            <h3>
-              Employees
-            </h3>
-
-            <table>
-
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>ID</th>
-                  <th>
-                    Department
-                  </th>
-                  <th>
-                    Action
-                  </th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {emps.length ===
-                0 ? (
+                <thead>
                   <tr>
-                    <td
-                      colSpan={4}
-                      className="muted"
-                    >
-                      No employees yet.
-                    </td>
+                    <th>Name</th>
+                    <th>ID</th>
+                    <th>
+                      Department
+                    </th>
+                    <th>
+                      Status
+                    </th>
+                    <th>
+                      Action
+                    </th>
                   </tr>
-                ) : (
-                  emps.map(
-                    (e) => (
-                      <tr
-                        key={e.id}
+                </thead>
+
+                <tbody>
+                  {filtered.length ===
+                  0 ? (
+                    <tr>
+                      <td
+                        colSpan={5}
+                        className="muted"
                       >
-                        <td>
-                          <b>
-                            {e.name}
-                          </b>
+                        No employees found.
+                      </td>
+                    </tr>
+                  ) : (
+                    filtered.map(
+                      (e) => (
+                        <tr
+                          key={e.id}
+                        >
+                          <td>
+                            <b>
+                              {e.name}
+                            </b>
 
-                          <div className="muted">
-                            {e.phone ||
-                              'No phone'}
-                          </div>
-                        </td>
+                            <div className="muted">
+                              {e.phone ||
+                                'No phone'}
+                            </div>
+                          </td>
 
-                        <td>
-                          {
-                            e.employee_code
-                          }
-                        </td>
+                          <td>
+                            {
+                              e.employee_code
+                            }
+                          </td>
 
-                        <td>
-                          {e.department ||
-                            '—'}
-                        </td>
+                          <td>
+                            {e.department ||
+                              '—'}
+                          </td>
 
-                        <td>
-                          <div className="toolbar">
+                          <td>
+                            {e.active !==
+                            false ? (
+                              <span className="badge p">
+                                Active
+                              </span>
+                            ) : (
+                              <span className="badge a">
+                                Deactivated
+                              </span>
+                            )}
+                          </td>
 
-                            <button
-                              className="btn secondary"
-                              onClick={() =>
-                                openHistory(
-                                  e
-                                )
-                              }
-                            >
-                              History
-                            </button>
+                          <td>
+                            <div className="toolbar">
 
-                            <button
-                              className="btn secondary"
-                              onClick={() =>
-                                startEdit(
-                                  e
-                                )
-                              }
-                            >
-                              Edit
-                            </button>
+                              <button
+                                className="btn secondary"
+                                onClick={() =>
+                                  openHistory(
+                                    e
+                                  )
+                                }
+                              >
+                                History
+                              </button>
 
-                            <button
-                              className="btn danger"
-                              onClick={() =>
-                                removeEmployee(
-                                  e.id,
-                                  e.name
-                                )
-                              }
-                            >
-                              Remove
-                            </button>
+                              <button
+                                className="btn secondary"
+                                onClick={() =>
+                                  startEdit(
+                                    e
+                                  )
+                                }
+                              >
+                                Edit
+                              </button>
 
-                          </div>
-                        </td>
-                      </tr>
+                              <button
+                                className="btn secondary"
+                                onClick={() =>
+                                  toggleEmployeeActive(
+                                    e.id,
+                                    e.name,
+                                    e.active !==
+                                      false
+                                  )
+                                }
+                              >
+                                {e.active !==
+                                false
+                                  ? 'Deactivate'
+                                  : 'Restore'}
+                              </button>
+
+                              <button
+                                className="btn danger"
+                                onClick={() =>
+                                  removeEmployee(
+                                    e.id,
+                                    e.name
+                                  )
+                                }
+                              >
+                                Remove
+                              </button>
+
+                            </div>
+                          </td>
+                        </tr>
+                      )
                     )
-                  )
-                )}
-              </tbody>
+                  )}
+                </tbody>
 
-            </table>
+              </table>
+
+            </div>
 
           </div>
 
@@ -1671,6 +1926,20 @@ export default function Dashboard({
                   Total employees:
                 </b>{' '}
                 {emps.length}
+              </p>
+
+              <p>
+                <b>
+                  Active employees:
+                </b>{' '}
+                {activeEmployeeCount}
+              </p>
+
+              <p>
+                <b>
+                  Deactivated:
+                </b>{' '}
+                {inactiveEmployeeCount}
               </p>
 
               <p>
@@ -1770,6 +2039,11 @@ export default function Dashboard({
                     selectedEmployee.department ||
                     'No department'
                   }
+                  {' • '}
+                  {selectedEmployee.active !==
+                  false
+                    ? 'Active'
+                    : 'Deactivated'}
                 </div>
               </div>
 
@@ -1805,6 +2079,23 @@ export default function Dashboard({
                   )
                 }
               />
+
+              <button
+                className="btn secondary"
+                onClick={() =>
+                  toggleEmployeeActive(
+                    selectedEmployee.id,
+                    selectedEmployee.name,
+                    selectedEmployee.active !==
+                      false
+                  )
+                }
+              >
+                {selectedEmployee.active !==
+                false
+                  ? 'Deactivate'
+                  : 'Restore'}
+              </button>
             </div>
 
             <div
@@ -1937,7 +2228,7 @@ export default function Dashboard({
                               <span
                                 className={
                                   'badge ' +
-                                  ({
+                                  (({
                                     present:
                                       'p',
                                     absent:
@@ -1948,7 +2239,8 @@ export default function Dashboard({
                                       'h',
                                   } as any)[
                                     a.status
-                                  ]
+                                  ] ||
+                                    '')
                                 }
                               >
                                 {a.status.replace(
