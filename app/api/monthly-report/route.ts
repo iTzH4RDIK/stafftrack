@@ -5,15 +5,25 @@ import { supabaseAdmin } from '../../../lib/supabase-admin';
 
 export async function GET(req: NextRequest) {
   try {
-    // Protect the cron route
-    if (
-      req.headers.get('authorization') !==
-      `Bearer ${process.env.CRON_SECRET}`
-    ) {
-      return new NextResponse('Unauthorized', {
-        status: 401,
-      });
-    }
+// Protect the cron route
+const authHeader = req.headers.get('authorization');
+const cronSecret = process.env.CRON_SECRET;
+
+console.log('CRON DEBUG:', {
+  hasAuthorizationHeader: !!authHeader,
+  hasCronSecret: !!cronSecret,
+  authorizationStartsWithBearer:
+    authHeader?.startsWith('Bearer ') ?? false,
+});
+
+if (
+  !cronSecret ||
+  authHeader !== `Bearer ${cronSecret}`
+) {
+  return new NextResponse('Unauthorized', {
+    status: 401,
+  });
+}
 
     const to = process.env.REPORT_TO_EMAIL;
     const from = process.env.REPORT_FROM_EMAIL;
